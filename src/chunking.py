@@ -145,7 +145,7 @@ def build_all_chunks(dataset):
 
 if __name__ == "__main__":
     # NOTE: start with a small number while testing (see note below the code)
-    ROWS_TO_PROCESS = 5000
+    ROWS_TO_PROCESS = 1000
 
     print("Loading dataset...")
     dataset = load_data(rows_needed=ROWS_TO_PROCESS)
