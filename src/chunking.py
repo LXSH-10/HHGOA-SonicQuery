@@ -17,10 +17,10 @@ from sentence_transformers import SentenceTransformer
 
 # ---------- 1. LOAD DATASET (same safe method from before) ----------
 
-def load_data(rows_needed=5000):
+def load_data(rows_needed=5000, filename="train/hintrain.parquet"):
     file_path = hf_hub_download(
         repo_id="ai4bharat/MSMARCO-XI",
-        filename="train/hintrain.parquet",
+        filename=filename,
         repo_type="dataset"
     )
     parquet_file = pq.ParquetFile(file_path)
@@ -144,12 +144,21 @@ def build_all_chunks(dataset):
 # ---------- 6. MAIN ----------
 
 if __name__ == "__main__":
+    from datasets import concatenate_datasets
+
     # NOTE: start with a small number while testing (see note below the code)
     ROWS_TO_PROCESS = 1000
 
-    print("Loading dataset...")
-    dataset = load_data(rows_needed=ROWS_TO_PROCESS)
-    print(f"Loaded {len(dataset)} rows.")
+    print("Loading Hindi dataset...")
+    hindi_dataset = load_data(rows_needed=ROWS_TO_PROCESS, filename="train/hintrain.parquet")
+    print(f"Loaded {len(hindi_dataset)} Hindi rows.")
+
+    print("Loading Marathi dataset...")
+    marathi_dataset = load_data(rows_needed=ROWS_TO_PROCESS, filename="train/martrain.parquet")
+    print(f"Loaded {len(marathi_dataset)} Marathi rows.")
+
+    dataset = concatenate_datasets([hindi_dataset, marathi_dataset])
+    print(f"Total combined rows: {len(dataset)}")
 
     print("Building chunks (semantic chunking is the slow part)...")
     chunks = build_all_chunks(dataset)
