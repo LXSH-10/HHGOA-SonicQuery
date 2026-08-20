@@ -8,6 +8,7 @@ Three checks, used in this order in the pipeline:
 3. is_grounded(answer_text, retrieved_chunks)         — AFTER generation, BEFORE showing the answer
 """
 
+import time
 from dotenv import load_dotenv
 import os
 from google import genai
@@ -59,6 +60,15 @@ def is_grounded(answer_text, retrieved_chunks, max_retries=3):
     Asks Gemini a second time: is this answer actually supported by the
     retrieved context, or did it drift/hallucinate? Returns True only if
     Gemini's reply starts with "yes".
+
+    Handles two distinct failure types differently:
+    - errors.ClientError (429, quota exceeded) — free tier resets per
+      minute, so this waits longer (35s) before retrying.
+    - errors.ServerError (503, model overloaded) — usually clears fast,
+      so this uses a short increasing backoff (5s, 10s, 20s).
+
+    If all retries are exhausted, fails safe: treats the answer as NOT
+    grounded rather than showing an unverified answer.
     """
     context = "\n\n".join(
         f"Chunk {i+1}: {chunk['text']}"
@@ -72,6 +82,8 @@ Answer given: {answer_text}
 
 Is this answer fully supported by the context above? Reply with only one word: yes or no."""
 
+    server_error_waits = [5, 10, 20]
+
     for attempt in range(1, max_retries + 1):
         try:
             response = client.models.generate_content(
@@ -80,12 +92,21 @@ Is this answer fully supported by the context above? Reply with only one word: y
             )
             reply = response.text.strip().lower()
             return reply.startswith("yes")
-        except errors.ServerError:
-            print(f"Attempt {attempt} failed (server busy). Retrying...")
+
+        except errors.ClientError as e:
+            print(f"Attempt {attempt} failed (quota exceeded: {e}).")
             if attempt == max_retries:
-                # If Gemini is unreachable, fail safe: treat as NOT grounded
-                # rather than showing an unverified answer.
                 return False
+            print("Waiting 35s for free-tier quota to reset...")
+            time.sleep(35)
+
+        except errors.ServerError as e:
+            print(f"Attempt {attempt} failed (server busy: {e}).")
+            if attempt == max_retries:
+                return False
+            wait = server_error_waits[attempt - 1]
+            print(f"Retrying in {wait}s...")
+            time.sleep(wait)
 
 
 if __name__ == "__main__":
