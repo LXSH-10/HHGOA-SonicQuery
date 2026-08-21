@@ -23,12 +23,22 @@ def generate_fast_answer(retrieved_chunks):
     }
 
 
-def generate_polished_answer(question, retrieved_chunks, max_retries=3):
+def generate_polished_answer(question, retrieved_chunks, language_name=None, max_retries=3):
     """
     Calls Gemini and instructs it to answer ONLY using the given chunks.
     If the answer isn't present in them, it returns the exact fallback
-    message instead of guessing. Retries automatically if Gemini's
-    servers are temporarily overloaded (503 error).
+    message instead of guessing.
+
+    language_name: optional, e.g. "Hindi", "Marathi", "English". When given,
+    tells Gemini to respond in that language. When None, no language
+    instruction is added (unchanged behavior).
+
+    Retries automatically on two distinct failure types:
+    - errors.ServerError (503, model temporarily overloaded) — short
+      increasing backoff, usually clears within seconds.
+    - errors.ClientError (429, quota exceeded) — free tier limits reset
+      per minute, so this waits longer before retrying.
+
     Fully independent from generate_fast_answer so the app can time
     and display each one separately.
     """
@@ -38,18 +48,24 @@ def generate_polished_answer(question, retrieved_chunks, max_retries=3):
         for i, chunk in enumerate(retrieved_chunks)
     )
 
+    language_instruction = (
+        f"\nRespond in {language_name} only.\n" if language_name else ""
+    )
+
     # Firm prompt — Gemini is told not to use outside knowledge
     prompt = f"""You are a helpful assistant. Answer the user's question using ONLY the context chunks below.
 If the answer is not present in the chunks, respond with exactly:
 "I don't have enough information to answer that."
 Do not use any outside knowledge.
-
+{language_instruction}
 Context:
 {context}
 
 Question: {question}
 
 Answer:"""
+
+    server_error_waits = [5, 10, 20]
 
     for attempt in range(1, max_retries + 1):
         try:
@@ -58,12 +74,22 @@ Answer:"""
                 contents=prompt
             )
             return response.text
+
+        except errors.ClientError:
+            # 429 = free-tier quota exceeded, resets roughly per minute
+            print(f"Attempt {attempt} failed (quota exceeded).")
+            if attempt == max_retries:
+                return "Answer service is temporarily busy. Please try again in a minute."
+            print("Waiting 35s for quota to reset...")
+            time.sleep(35)
+
         except errors.ServerError:
             # 503 = model temporarily overloaded on Google's side
-            print(f"Attempt {attempt} failed (server busy). Retrying in 5s...")
+            wait = server_error_waits[attempt - 1]
+            print(f"Attempt {attempt} failed (server busy). Retrying in {wait}s...")
             if attempt == max_retries:
                 return "Gemini is currently overloaded. Please try again in a moment."
-            time.sleep(5)
+            time.sleep(wait)
 
 
 if __name__ == "__main__":
@@ -89,3 +115,9 @@ if __name__ == "__main__":
     polished2 = generate_polished_answer(unrelated_question, sample_chunks)
     print("\nQuestion:", unrelated_question)
     print("Polished answer:", polished2)
+
+    # Test generate_polished_answer — with a language instruction
+    hindi_question = "एफिल टावर कहाँ स्थित है?"
+    polished3 = generate_polished_answer(hindi_question, sample_chunks, language_name="Hindi")
+    print("\nQuestion:", hindi_question)
+    print("Polished answer (Hindi):", polished3)
