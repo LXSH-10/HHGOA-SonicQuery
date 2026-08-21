@@ -16,7 +16,7 @@ from sentence_transformers import SentenceTransformer
 
 CHUNKS_PATH = "chunks.json"
 INDEX_PATH = "chunks.index"
-MODEL_NAME = "paraphrase-multilingual-MiniLM-L12-v2"
+MODEL_NAME = "intfloat/multilingual-e5-small"
 
 _model = None
 _chunks = None
@@ -44,9 +44,10 @@ def build_index(chunks_path=CHUNKS_PATH, index_path=INDEX_PATH):
     texts = [c["text"] for c in chunks]
 
     model = _get_model()
-    print(f"Embedding {len(texts)} chunks...")
+    prefixed_texts = [f"passage: {text}" for text in texts]
+    print(f"Embedding {len(prefixed_texts)} chunks...")
     embeddings = model.encode(
-        texts,
+        prefixed_texts,
         batch_size=64,
         show_progress_bar=True,
         convert_to_numpy=True,
@@ -98,7 +99,7 @@ def search(query_text, top_k=5, language=None):
 
     t_encode_start = _time.perf_counter()
     query_embedding = model.encode(
-        [query_text],
+        [f"query: {query_text}"],
         convert_to_numpy=True,
         normalize_embeddings=True,
     ).astype("float32")

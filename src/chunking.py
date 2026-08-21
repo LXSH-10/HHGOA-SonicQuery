@@ -62,7 +62,7 @@ _semantic_model = None  # loaded once, reused — loading per-call would be very
 def _get_semantic_model():
     global _semantic_model
     if _semantic_model is None:
-        _semantic_model = SentenceTransformer("paraphrase-multilingual-MiniLM-L12-v2")
+        _semantic_model = SentenceTransformer("intfloat/multilingual-e5-small")
     return _semantic_model
 
 
@@ -85,7 +85,8 @@ def semantic_chunking(text, similarity_threshold=0.5):
         return [sentences[0]]
 
     model = _get_semantic_model()
-    embeddings = model.encode(sentences, convert_to_numpy=True, normalize_embeddings=True)
+    prefixed_sentences = [f"passage: {sentence}" for sentence in sentences]
+    embeddings = model.encode(prefixed_sentences, convert_to_numpy=True, normalize_embeddings=True)
 
     chunks = []
     current_sentences = [sentences[0]]

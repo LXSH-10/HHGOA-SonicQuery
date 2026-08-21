@@ -1,3 +1,9 @@
 sentence-transformers
 numpy
 pyarrow
+groq
+faiss-cpu
+requests
+python-dotenv
+streamlit
+streamlit-mic-recorder
