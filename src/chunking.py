@@ -148,7 +148,7 @@ if __name__ == "__main__":
     from datasets import concatenate_datasets
 
     # NOTE: start with a small number while testing (see note below the code)
-    ROWS_TO_PROCESS = 2500
+    ROWS_TO_PROCESS = 1000
 
     print("Loading Hindi dataset...")
     hindi_dataset = load_data(rows_needed=ROWS_TO_PROCESS, filename="train/hintrain.parquet")
