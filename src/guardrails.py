@@ -11,13 +11,13 @@ Three checks, used in this order in the pipeline:
 import time
 from dotenv import load_dotenv
 import os
-from google import genai
-from google.genai import errors
+from groq import Groq, APIStatusError, RateLimitError
 
 load_dotenv()
-gemini_key = os.getenv("GEMINI_API_KEY")
+groq_key = os.getenv("GROQ_API_KEY")
+model_name = os.getenv("GROQ_MODEL", "llama-3.1-8b-instant")
 
-client = genai.Client(api_key=gemini_key)
+client = Groq(api_key=groq_key) if groq_key else None
 
 
 # ---------- 1. SAFE QUERY CHECK (runs first, no API call) ----------
@@ -84,23 +84,28 @@ Is this answer fully supported by the context above? Reply with only one word: y
 
     server_error_waits = [5, 10, 20]
 
+    if client is None:
+        return False
+
     for attempt in range(1, max_retries + 1):
         try:
-            response = client.models.generate_content(
-                model="gemini-flash-latest",
-                contents=prompt
+            response = client.chat.completions.create(
+                model=model_name,
+                messages=[{"role": "user", "content": prompt}],
             )
-            reply = response.text.strip().lower()
+            reply = response.choices[0].message.content.strip().lower()
             return reply.startswith("yes")
 
-        except errors.ClientError as e:
+        except RateLimitError as e:
             print(f"Attempt {attempt} failed (quota exceeded: {e}).")
             if attempt == max_retries:
                 return False
             print("Waiting 35s for free-tier quota to reset...")
             time.sleep(35)
 
-        except errors.ServerError as e:
+        except APIStatusError as e:
+            if e.status_code < 500:
+                return False
             print(f"Attempt {attempt} failed (server busy: {e}).")
             if attempt == max_retries:
                 return False

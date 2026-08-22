@@ -65,7 +65,7 @@ _semantic_model = None  # loaded once, reused — loading per-call would be very
 def _get_semantic_model():
     global _semantic_model
     if _semantic_model is None:
-        _semantic_model = SentenceTransformer("paraphrase-multilingual-MiniLM-L12-v2")
+        _semantic_model = SentenceTransformer("intfloat/multilingual-e5-small")
     return _semantic_model
 
 
@@ -88,7 +88,8 @@ def semantic_chunking(text, similarity_threshold=0.5):
         return [sentences[0]]
 
     model = _get_semantic_model()
-    embeddings = model.encode(sentences, convert_to_numpy=True, normalize_embeddings=True)
+    prefixed_sentences = [f"passage: {sentence}" for sentence in sentences]
+    embeddings = model.encode(prefixed_sentences, convert_to_numpy=True, normalize_embeddings=True)
 
     chunks = []
     current_sentences = [sentences[0]]
@@ -172,7 +173,7 @@ def build_all_chunks(dataset, language, include_english=False):
 
 if __name__ == "__main__":
     # NOTE: start with a small number while testing (see note below the code)
-    ROWS_TO_PROCESS = 2500
+    ROWS_TO_PROCESS = 1000
 
     print("Loading Hindi dataset...")
     hindi_dataset = load_data(rows_needed=ROWS_TO_PROCESS, filename="train/hintrain.parquet")

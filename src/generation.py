@@ -1,13 +1,13 @@
 from dotenv import load_dotenv
 import os
 import time
-from google import genai
-from google.genai import errors
+from groq import Groq, APIStatusError, RateLimitError
 
 load_dotenv()
-gemini_key = os.getenv("GEMINI_API_KEY")
+groq_key = os.getenv("GROQ_API_KEY")
+model_name = os.getenv("GROQ_MODEL", "openai/gpt-oss-20b")
 
-client = genai.Client(api_key=gemini_key)
+client = Groq(api_key=groq_key) if groq_key else None
 
 
 def generate_fast_answer(retrieved_chunks):
@@ -16,6 +16,12 @@ def generate_fast_answer(retrieved_chunks):
     similarity score. Use this to show a near-instant raw answer while
     generate_polished_answer is still being generated.
     """
+    if not retrieved_chunks:
+        return {
+            "answer": "I don't have enough information to answer that.",
+            "similarity_score": 0.0
+        }
+
     top_chunk = retrieved_chunks[0]
     return {
         "answer": top_chunk["text"],
@@ -25,23 +31,22 @@ def generate_fast_answer(retrieved_chunks):
 
 def generate_polished_answer(question, retrieved_chunks, language_name=None, max_retries=3):
     """
-    Calls Gemini and instructs it to answer ONLY using the given chunks.
+    Calls the Groq model and instructs it to answer ONLY using the given chunks.
     If the answer isn't present in them, it returns the exact fallback
     message instead of guessing.
 
     language_name: optional, e.g. "Hindi", "Marathi", "English". When given,
-    tells Gemini to respond in that language. When None, no language
-    instruction is added (unchanged behavior).
+    tells the model to respond in that language. When None, no language
+    instruction is added.
 
-    Retries automatically on two distinct failure types:
-    - errors.ServerError (503, model temporarily overloaded) — short
-      increasing backoff, usually clears within seconds.
-    - errors.ClientError (429, quota exceeded) — free tier limits reset
-      per minute, so this waits longer before retrying.
-
-    Fully independent from generate_fast_answer so the app can time
-    and display each one separately.
+    Retries automatically on quota/server errors.
     """
+    if not retrieved_chunks:
+        return "I don't have enough information to answer that."
+
+    if client is None:
+        raise ValueError("GROQ_API_KEY is missing. Add it to your .env file before using the model.")
+
     # Join all chunk texts into one labeled context block
     context = "\n\n".join(
         f"Chunk {i+1}: {chunk['text']}"
@@ -52,7 +57,7 @@ def generate_polished_answer(question, retrieved_chunks, language_name=None, max
         f"\nRespond in {language_name} only.\n" if language_name else ""
     )
 
-    # Firm prompt — Gemini is told not to use outside knowledge
+    # Firm prompt — the model is told not to use outside knowledge
     prompt = f"""You are a helpful assistant. Answer the user's question using ONLY the context chunks below.
 If the answer is not present in the chunks, respond with exactly:
 "I don't have enough information to answer that."
@@ -69,13 +74,13 @@ Answer:"""
 
     for attempt in range(1, max_retries + 1):
         try:
-            response = client.models.generate_content(
-                model="gemini-flash-latest",
-                contents=prompt
+            response = client.chat.completions.create(
+                model=model_name,
+                messages=[{"role": "user", "content": prompt}],
             )
-            return response.text
+            return response.choices[0].message.content
 
-        except errors.ClientError:
+        except RateLimitError:
             # 429 = free-tier quota exceeded, resets roughly per minute
             print(f"Attempt {attempt} failed (quota exceeded).")
             if attempt == max_retries:
@@ -83,12 +88,14 @@ Answer:"""
             print("Waiting 35s for quota to reset...")
             time.sleep(35)
 
-        except errors.ServerError:
-            # 503 = model temporarily overloaded on Google's side
+        except APIStatusError as error:
+            if error.status_code < 500:
+                raise
+            # 503 = model temporarily overloaded on the provider side
             wait = server_error_waits[attempt - 1]
             print(f"Attempt {attempt} failed (server busy). Retrying in {wait}s...")
             if attempt == max_retries:
-                return "Gemini is currently overloaded. Please try again in a moment."
+                return "The answer service is currently overloaded. Please try again in a moment."
             time.sleep(wait)
 
 
