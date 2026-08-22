@@ -4,6 +4,9 @@ Three chunking strategies for HHGOA-SonicQuery:
 1. fixed_size_chunking      - word-window chunks with overlap
 2. semantic_chunking        - groups sentences using sentence-transformer embeddings
 3. metadata_aware_chunking  - treats each original passage as its own chunk
+
+Every chunk produced is tagged with a "language" field — this is required
+for retrieval.py's language filtering to work at all.
 """
 
 import re
@@ -107,36 +110,60 @@ def semantic_chunking(text, similarity_threshold=0.5):
 
 # ---------- 4. STRATEGY 3: METADATA-AWARE CHUNKING ----------
 
-def metadata_aware_chunking(dataset_row):
+def metadata_aware_chunking(dataset_row, passage_field="Translated_passages"):
     """Treats each original passage as its own chunk — no splitting."""
-    passages = dataset_row["passages"]["Translated_passages"]
+    passages = dataset_row["passages"][passage_field]
     query_id = dataset_row["query_id"]
     return [(text, f"{query_id}_p{idx}") for idx, text in enumerate(passages)]
 
 
 # ---------- 5. RUN ALL THREE STRATEGIES ACROSS THE DATASET ----------
 
-def build_all_chunks(dataset):
+def _chunk_passages(passages, query_id, language):
+    """Runs fixed_size + semantic chunking over one row's passage list, tagged with language."""
+    out = []
+    for idx, passage_text in enumerate(passages):
+        source_id = f"{query_id}_p{idx}"
+        for chunk_text in fixed_size_chunking(passage_text):
+            out.append({"text": chunk_text, "method": "fixed_size", "source_id": source_id, "language": language})
+        for chunk_text in semantic_chunking(passage_text):
+            out.append({"text": chunk_text, "method": "semantic", "source_id": source_id, "language": language})
+    return out
+
+
+def build_all_chunks(dataset, language, include_english=False):
+    """
+    language: tag applied to every chunk built from this dataset's
+    Translated_passages (e.g. "hindi", "marathi").
+
+    include_english: if True, ALSO chunks passages["English_passages"] from
+    the same rows, tagged "language": "english". Only set this True for ONE
+    dataset load — every language config shares the same underlying English
+    source text, so extracting it twice just duplicates chunks and wastes
+    embedding time.
+    """
     all_chunks = []
 
     for row_num, row in enumerate(dataset):
         query_id = row["query_id"]
-        passages = row["passages"]["Translated_passages"]
 
-        for idx, passage_text in enumerate(passages):
-            source_id = f"{query_id}_p{idx}"
+        # Translated passages (Hindi, Marathi, etc.), tagged with `language`
+        translated_passages = row["passages"]["Translated_passages"]
+        all_chunks.extend(_chunk_passages(translated_passages, query_id, language))
 
-            for chunk_text in fixed_size_chunking(passage_text):
-                all_chunks.append({"text": chunk_text, "method": "fixed_size", "source_id": source_id})
+        for passage_text, source_id in metadata_aware_chunking(row, "Translated_passages"):
+            all_chunks.append({"text": passage_text, "method": "metadata_aware", "source_id": source_id, "language": language})
 
-            for chunk_text in semantic_chunking(passage_text):
-                all_chunks.append({"text": chunk_text, "method": "semantic", "source_id": source_id})
+        # English passages, tagged "english" — only when this row's load requests it
+        if include_english:
+            english_passages = row["passages"]["English_passages"]
+            all_chunks.extend(_chunk_passages(english_passages, query_id, "english"))
 
-        for passage_text, source_id in metadata_aware_chunking(row):
-            all_chunks.append({"text": passage_text, "method": "metadata_aware", "source_id": source_id})
+            for passage_text, source_id in metadata_aware_chunking(row, "English_passages"):
+                all_chunks.append({"text": passage_text, "method": "metadata_aware", "source_id": source_id, "language": "english"})
 
         if (row_num + 1) % 100 == 0:
-            print(f"Processed {row_num + 1} rows...")
+            print(f"Processed {row_num + 1} rows ({language})...")
 
     return all_chunks
 
@@ -144,8 +171,6 @@ def build_all_chunks(dataset):
 # ---------- 6. MAIN ----------
 
 if __name__ == "__main__":
-    from datasets import concatenate_datasets
-
     # NOTE: start with a small number while testing (see note below the code)
     ROWS_TO_PROCESS = 2500
 
@@ -157,14 +182,25 @@ if __name__ == "__main__":
     marathi_dataset = load_data(rows_needed=ROWS_TO_PROCESS, filename="train/martrain.parquet")
     print(f"Loaded {len(marathi_dataset)} Marathi rows.")
 
-    dataset = concatenate_datasets([hindi_dataset, marathi_dataset])
-    print(f"Total combined rows: {len(dataset)}")
+    print("Building Hindi + English chunks (English piggybacks on the Hindi rows, no extra download)...")
+    hindi_chunks = build_all_chunks(hindi_dataset, language="hindi", include_english=True)
+    print(f"Hindi+English chunks created: {len(hindi_chunks)}")
 
-    print("Building chunks (semantic chunking is the slow part)...")
-    chunks = build_all_chunks(dataset)
+    print("Building Marathi chunks...")
+    marathi_chunks = build_all_chunks(marathi_dataset, language="marathi", include_english=False)
+    print(f"Marathi chunks created: {len(marathi_chunks)}")
+
+    chunks = hindi_chunks + marathi_chunks
     print(f"Total chunks created: {len(chunks)}")
+    print(f"  hindi: {sum(1 for c in chunks if c['language'] == 'hindi')}")
+    print(f"  marathi: {sum(1 for c in chunks if c['language'] == 'marathi')}")
+    print(f"  english: {sum(1 for c in chunks if c['language'] == 'english')}")
 
     with open("chunks.json", "w", encoding="utf-8") as f:
         json.dump(chunks, f, ensure_ascii=False, indent=2)
 
-    print("Saved to chunks.json")
+    import os
+    size_mb = os.path.getsize("chunks.json") / (1024 * 1024)
+    print(f"Saved to chunks.json ({size_mb:.1f} MB)")
+    if size_mb > 80:
+        print("WARNING: getting close to GitHub's 100MB limit — lower ROWS_TO_PROCESS")
